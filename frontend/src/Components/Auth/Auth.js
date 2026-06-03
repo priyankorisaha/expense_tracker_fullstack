@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import styled from 'styled-components';
 import { useGlobalContext } from '../../context/globalContext';
 
 function Auth() {
-    const { login, register, error } = useGlobalContext();
+    const { login, register, error, setError } = useGlobalContext();
     const [isLogin, setIsLogin] = useState(true);
     const [form, setForm] = useState({
         name: '',
@@ -13,8 +13,13 @@ function Auth() {
         timezone: 'UTC',
     });
 
+    useEffect(() => {
+        setError(null);
+    }, [isLogin, setError]);
+
     const onSubmit = async (e) => {
         e.preventDefault();
+        setError(null);
         if (isLogin) {
             await login({ email: form.email, password: form.password });
         } else {
@@ -40,7 +45,6 @@ function Auth() {
                     placeholder="Email"
                     value={form.email}
                     onChange={(e) => setForm({ ...form, email: e.target.value })}
-                    required
                 />
                 <input
                     type="password"
@@ -70,12 +74,14 @@ function Auth() {
                 <p>{error}</p>
             </form>
 
-            <button className="switch" onClick={() => setIsLogin(!isLogin)}>
+            <button className="switch" type="button" onClick={() => setIsLogin(!isLogin)}>
                 {isLogin ? 'Need an account? Register' : 'Already have an account? Login'}
             </button>
         </AuthStyled>
     );
 }
+
+
 
 const AuthStyled = styled.div`
     display: flex;
