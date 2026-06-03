@@ -1,18 +1,20 @@
-import React, { useState } from 'react'
+import React from 'react'
 import styled from 'styled-components'
 import image1 from '../../img/image1.png'
 import { signout } from '../../utils/Icons'
 import { menuItems } from '../../utils/menuItems'
+import { useGlobalContext } from '../../context/globalContext'
 
 function Navigation({active, setActive}) {
-    
+    const { logout, user } = useGlobalContext()
+
     return (
         <NavStyled>
             <div className="user-con">
                 <img src={image1} alt="" />
                 <div className="text">
-                    <h2>PROFILE</h2>
-                    <p>Your Money</p>
+                    <h2>{user?.name || 'PROFILE'}</h2>
+                    <p>{user?.email || 'Your Money'}</p>
                 </div>
             </div>
             <ul className="menu-items">
@@ -28,7 +30,7 @@ function Navigation({active, setActive}) {
                 })}
             </ul>
             <div className="bottom-nav">
-                <li>
+                <li onClick={logout}>
                     {signout} Sign Out
                 </li>
             </div>
@@ -91,23 +93,45 @@ const NavStyled = styled.nav`
                 font-size: 1.4rem;
                 transition: all .4s ease-in-out;
             }
+
+            &:hover {
+                background: rgba(34, 34, 96, 0.08);
+                color: rgba(34, 34, 96, 0.9);
+                transform: translateX(5px);
+
+                i {
+                    color: rgba(34, 34, 96, 0.9);
+                    transform: scale(1.1);
+                }
+            }
         }
     }
 
-    .active{
-        color: rgba(34, 34, 96, 1) !important;
-        i{
-            color: rgba(34, 34, 96, 1) !important;
-        }
-        &::before{
-            content: "";
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 4px;
-            height: 100%;
-            background: #222260;
-            border-radius: 0 10px 10px 0;
+    .bottom-nav {
+        li {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: rgba(34, 34, 96, 0.6);
+            padding: 0.8rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+
+            &:hover {
+                background: rgba(231, 76, 60, 0.1);
+                color: #e74c3c;
+                transform: translateX(5px);
+
+                svg, i {
+                    color: #e74c3c;
+                    transform: scale(1.15);
+                }
+            }
+
+            svg, i {
+                transition: all 0.3s ease;
+            }
         }
     }
 `;

@@ -7,13 +7,15 @@ import Navigation from './Components/Navigation/Navigation'
 import Dashboard from './Components/Dashboard/Dashboard';
 import Income from './Components/Income/Income'
 import Expenses from './Components/Expenses/Expenses';
+import BudgetCopilot from './Components/BudgetCopilot/BudgetCopilot';
+import AIChat from './Components/AIChat/AIChat';
+import Auth from './Components/Auth/Auth';
 import { useGlobalContext } from './context/globalContext';
 
 function App() {
   const [active, setActive] = useState(1)
 
-  const global = useGlobalContext()
-  console.log(global);
+  const { token } = useGlobalContext()
 
   const displayData = () => {
     switch(active){
@@ -23,9 +25,13 @@ function App() {
         return <Dashboard />
       case 3:
         return <Income />
-      case 4: 
+      case 4:
         return <Expenses />
-      default: 
+      case 5:
+        return <BudgetCopilot />
+      case 6:
+        return <AIChat />
+      default:
         return <Dashboard />
     }
   }
@@ -33,6 +39,15 @@ function App() {
   const orbMemo = useMemo(() => {
     return <Orb />
   },[])
+
+  if (!token) {
+    return (
+      <AppStyled bg={bg} className="App">
+        {orbMemo}
+        <Auth />
+      </AppStyled>
+    )
+  }
 
   return (
     <AppStyled bg={bg} className="App">
