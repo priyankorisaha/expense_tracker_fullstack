@@ -6,7 +6,15 @@ import { InnerLayout } from '../../styles/Layouts';
 import Chart from '../Chart/Chart';
 
 function Dashboard() {
-    const {totalExpenses,incomes, expenses, totalIncome, totalBalance, getIncomes, getExpenses } = useGlobalContext()
+    const {
+        totalExpenses,
+        incomes,
+        expenses,
+        totalIncome,
+        totalBalance,
+        getIncomes,
+        getExpenses,
+    } = useGlobalContext()
 
     useEffect(() => {
         getIncomes()
@@ -84,7 +92,7 @@ const DashboardStyled = styled.div`
                 .income, .expense{
                     grid-column: span 2;
                 }
-                .income, .expense, .balance{
+                .income, .expense, .balance {
                     background: #FCF6F9;
                     border: 2px solid #FFFFFF;
                     box-shadow: 0px 1px 15px rgba(0, 0, 0, 0.06);
@@ -106,6 +114,22 @@ const DashboardStyled = styled.div`
                         color: var(--color-green);
                         opacity: 0.6;
                         font-size: 4.5rem;
+                    }
+                }
+
+                .current-month{
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    p{
+                        font-size: 2rem;
+                        font-weight: 700;
+                        margin: 0.25rem 0;
+                    }
+                    .current-month-line{
+                        font-size: 1.4rem;
+                        font-weight: 600;
                     }
                 }
             }

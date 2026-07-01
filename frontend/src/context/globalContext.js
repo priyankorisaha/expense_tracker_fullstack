@@ -1,7 +1,7 @@
 import React, { useCallback, useContext, useMemo, useState } from 'react';
 import axios from 'axios';
 
-const BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5001/api/v1/';
+const BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000/api/v1/';
 
 const buildApi = (token) =>
     axios.create({
@@ -34,7 +34,10 @@ export const GlobalProvider = ({ children }) => {
     const [user, setUser] = useState(readStoredUser);
 
     const [budgetCopilot, setBudgetCopilot] = useState(null);
+    const [budgetError, setBudgetError] = useState(null);
+    const [budgetLoading, setBudgetLoading] = useState(false);
     const [chatMessages, setChatMessages] = useState([]);
+    const [chatLoading, setChatLoading] = useState(false);
 
     const api = useMemo(() => buildApi(token), [token]);
 
@@ -44,6 +47,7 @@ export const GlobalProvider = ({ children }) => {
         setIncomes([]);
         setExpenses([]);
         setBudgetCopilot(null);
+        setBudgetError(null);
         setChatMessages([]);
         localStorage.removeItem('token');
         localStorage.removeItem('user');
@@ -146,18 +150,24 @@ export const GlobalProvider = ({ children }) => {
 
     const getBudgetCopilot = useCallback(async () => {
         try {
+            setBudgetError(null);
+            setBudgetLoading(true);
             const response = await api.get('ai/budget-copilot');
-            setBudgetCopilot(response.data);
+            const data = response.data || {};
+            setBudgetCopilot({ ...data, isML: Boolean(data.isML), mlError: data.mlError || null });
         } catch (err) {
             const msg = err?.response?.data?.message || 'Unable to fetch budget copilot';
-            handleProtectedError(err, 'Unable to fetch budget copilot');
+            if (err?.response?.status === 401) {
+                handleProtectedError(err, msg);
+                setBudgetCopilot(null);
+                return;
+            }
 
-            setBudgetCopilot({
-                healthScore: 0,
-                safeToSpend: 0,
-                categoryBudgets: [],
-                recommendations: [msg],
-            });
+            setBudgetError(msg);
+            setBudgetCopilot(null);
+            return;
+        } finally {
+            setBudgetLoading(false);
         }
     }, [api, handleProtectedError]);
 
@@ -200,21 +210,55 @@ export const GlobalProvider = ({ children }) => {
         return history.slice(0, 3);
     };
 
-    const askAiChat = async (question) => {
+    // Helpers for monthly views
+    const _monthKey = (date) => {
         try {
-            const response = await api.post('ai/chat', { question });
-            const newMessages = [
-                ...chatMessages,
-                { role: 'user', content: question },
-                { role: 'assistant', content: response.data.answer, followUps: response.data.followUps || [] },
-            ];
-            setChatMessages(newMessages);
-            return response.data;
-        } catch (err) {
-            handleProtectedError(err, 'Unable to get AI response');
+            return new Date(date).toISOString().slice(0, 7); // YYYY-MM
+        } catch (e) {
             return null;
         }
     };
+
+    const getMonths = () => {
+        const months = new Set();
+        [...incomes, ...expenses].forEach((t) => {
+            const key = _monthKey(t.date || t.createdAt || t.createdAt);
+            if (key) months.add(key);
+        });
+        return Array.from(months).sort((a, b) => (a < b ? 1 : -1));
+    };
+
+    const getTransactionsForMonth = (month, type) => {
+        const list = type === 'income' ? incomes : expenses;
+        return list.filter((t) => _monthKey(t.date || t.createdAt) === month).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    };
+
+    const monthTotals = (month) => {
+        const incomeTotal = incomes.filter((t) => _monthKey(t.date || t.createdAt) === month).reduce((s, i) => s + Number(i.amount || 0), 0);
+        const expenseTotal = expenses.filter((t) => _monthKey(t.date || t.createdAt) === month).reduce((s, e) => s + Number(e.amount || 0), 0);
+        return { incomeTotal, expenseTotal };
+    };
+
+    const currentMonthKey = () => new Date().toISOString().slice(0, 7);
+
+
+    const askAiChat = useCallback(async (question) => {
+        try {
+            setChatLoading(true);
+            const response = await api.post('ai/chat', { question });
+            setChatMessages((currentMessages) => [
+                ...currentMessages,
+                { role: 'user', content: question },
+                { role: 'assistant', content: response.data.answer, followUps: response.data.followUps || [], isML: response.data.isML },
+            ]);
+            setChatLoading(false);
+            return response.data;
+        } catch (err) {
+            setChatLoading(false);
+            handleProtectedError(err, 'Unable to get AI response');
+            return null;
+        }
+    }, [api, handleProtectedError]);
 
 
     return (
@@ -232,6 +276,10 @@ export const GlobalProvider = ({ children }) => {
                 totalExpenses,
                 totalBalance,
                 transactionHistory,
+                getMonths,
+                getTransactionsForMonth,
+                monthTotals,
+                currentMonthKey,
                 error,
                 setError,
                 token,
@@ -240,9 +288,12 @@ export const GlobalProvider = ({ children }) => {
                 register,
                 logout,
                 budgetCopilot,
+                budgetError,
+                budgetLoading,
                 getBudgetCopilot,
                 chatMessages,
                 askAiChat,
+                chatLoading,
             }}
         >
             {children}

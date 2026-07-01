@@ -9,9 +9,9 @@ const Income = require('../models/IncomeModel');
  
          amount = Number(amount);
  
-         if (!title || !category || !description || !date) {
-             return res.status(400).json({ message: 'All fields are required!' });
-         }
+        if (!title || !category || !date) {
+            return res.status(400).json({ message: 'title, category and date are required!' });
+        }
  
          if (!amount || amount <= 0) {
              return res.status(400).json({ message: 'Amount must be a positive number!' });
@@ -22,7 +22,7 @@ const Income = require('../models/IncomeModel');
              title,
              amount,
              category,
-             description,
+            description: description || '',
              date,
          });
  

@@ -6,24 +6,56 @@ import IncomeItem from '../IncomeItem/IncomeItem';
 import ExpenseForm from './ExpenseForm';
 
 function Expenses() {
-    const {expenses, getExpenses, deleteExpense, totalExpenses} = useGlobalContext()
+    const {expenses, getExpenses, deleteExpense, user} = useGlobalContext()
 
     useEffect(() => {
         getExpenses()
     }, [getExpenses])
+
+    const now = new Date();
+    const monthLabel = now.toLocaleString(undefined, { month: 'long' });
+    const year = now.getFullYear();
+
+    const currency = user?.currency === 'USD' ? '$' : (user?.currency === 'INR' ? '₹' : (user?.currency || '₹'));
+
+    const parseDate = (value) => {
+        if (!value) return null;
+        if (value instanceof Date) return value;
+        if (typeof value === 'number') return new Date(value);
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            const dmy = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            if (dmy) {
+                const [, day, month, year] = dmy;
+                return new Date(Number(year), Number(month) - 1, Number(day));
+            }
+            const parsed = new Date(trimmed);
+            return Number.isNaN(parsed.getTime()) ? null : parsed;
+        }
+        if (value?.$date) return new Date(value.$date);
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    const monthlyExpenses = expenses.filter(i => {
+        const d = parseDate(i.date || i.createdAt);
+        return d && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    });
+
+    const monthlyTotal = monthlyExpenses.reduce((s, it) => s + Number(it.amount || 0), 0);
+
     return (
         <ExpenseStyled>
             <InnerLayout>
-                <h1>Expenses</h1>
-                <h2 className="total-income">Total Expense: <span>₹{totalExpenses()}</span></h2>
+                <h1>Expenses — {monthLabel} {year}</h1>
+                <h2 className="total-income">Current Month Total: <span>{currency}{monthlyTotal}</span></h2>
                 <div className="income-content">
                     <div className="form-container">
                         <ExpenseForm />
                     </div>
                     <div className="incomes">
-                        {expenses.map((income) => {
+                        {monthlyExpenses.map((income) => {
                             const {_id, title, amount, date, category, description, type} = income;
-                            console.log(income)
                             return <IncomeItem
                                 key={_id}
                                 id={_id} 

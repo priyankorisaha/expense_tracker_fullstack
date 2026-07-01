@@ -12,12 +12,13 @@ function Form() {
     const [inputState, setInputState] = useState({
         title: '',
         amount: '',
-        date: '',
+        date: new Date(),
         category: '',
+        customCategory: '',
         description: '',
     })
 
-    const { title, amount, date, category,description } = inputState;
+    const { title, amount, date, category, customCategory, description } = inputState;
 
     const handleInput = name => e => {
         setInputState({...inputState, [name]: e.target.value})
@@ -26,12 +27,14 @@ function Form() {
 
     const handleSubmit = e => {
         e.preventDefault()
-        addIncome(inputState)
+        const finalCategory = category === 'other' && customCategory ? customCategory : category
+        addIncome({ ...inputState, category: finalCategory, date })
         setInputState({
             title: '',
             amount: '',
-            date: '',
+            date: new Date(),
             category: '',
+            customCategory: '',
             description: '',
         })
     }
@@ -59,12 +62,9 @@ function Form() {
             <div className="input-control">
                 <DatePicker 
                     id='date'
-                    placeholderText='Enter A Date'
                     selected={date}
                     dateFormat="dd/MM/yyyy"
-                    onChange={(date) => {
-                        setInputState({...inputState, date: date})
-                    }}
+                    onChange={(date) => setInputState({...inputState, date: date})}
                 />
             </div>
             <div className="selects input-control">
@@ -79,9 +79,18 @@ function Form() {
                     <option value="youtube">Youtube</option>  
                     <option value="other">Other</option>  
                 </select>
+                {category === 'other' && (
+                    <input
+                        type="text"
+                        placeholder="Specify category"
+                        value={customCategory}
+                        onChange={(e) => setInputState({...inputState, customCategory: e.target.value})}
+                        style={{ marginTop: '0.5rem' }}
+                    />
+                )}
             </div>
             <div className="input-control">
-                <textarea name="description" value={description} placeholder='Add A Reference' id="description" cols="30" rows="4" onChange={handleInput('description')}></textarea>
+                <textarea name="description" value={description} placeholder='Add A Reference (optional)' id="description" cols="30" rows="4" onChange={handleInput('description')}></textarea>
             </div>
             <div className="submit-btn">
                 <Button 

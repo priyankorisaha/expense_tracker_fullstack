@@ -1,11 +1,20 @@
 const API_URL = 'https://api.openai.com/v1/chat/completions';
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:5002';
+// Allow longer boot timeout because local model training can take time on first run
+const ML_BOOT_TIMEOUT_MS = Number(process.env.ML_BOOT_TIMEOUT_MS || 120000);
+const { spawn, spawnSync } = require('child_process');
+const path = require('path');
+
+const ML_SERVICE_DIR = path.resolve(__dirname, '..', '..', 'ml-service');
+let mlProcess = null;
+let mlBootPromise = null;
+let lastMlError = null;
 
 const hasApiKey = () => Boolean(process.env.OPENAI_API_KEY);
 
 const callLLM = async (messages, temperature = 0.2) => {
     const key = process.env.OPENAI_API_KEY;
     if (!key) {
-        console.error('OpenAI API key is missing. Set OPENAI_API_KEY in .env');
         return null;
     }
 
@@ -44,7 +53,227 @@ const callLLM = async (messages, temperature = 0.2) => {
     }
 };
 
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 3000) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+const isMlHealthy = async () => {
+    try {
+        // allow a slightly longer timeout when checking health locally
+        const response = await fetchWithTimeout(`${ML_SERVICE_URL}/health`, {}, 2000);
+        if (!response.ok) {
+            lastMlError = `ML health probe returned ${response.status}`;
+            return false;
+        }
+        lastMlError = null;
+        return true;
+    } catch (err) {
+        lastMlError = err.message;
+        return false;
+    }
+};
+
+const getPythonCandidates = () => [
+    { command: path.join(ML_SERVICE_DIR, 'venv', 'Scripts', 'python.exe'), checkArgs: ['--version'], runArgs: ['app.py'] },
+    { command: 'python', checkArgs: ['--version'], runArgs: ['app.py'] },
+    { command: 'python3', checkArgs: ['--version'], runArgs: ['app.py'] },
+    { command: 'py', checkArgs: ['-3', '--version'], runArgs: ['app.py'] },
+    { command: 'py', checkArgs: ['--version'], runArgs: ['app.py'] },
+];
+
+const pickPythonCommand = () => {
+    for (const candidate of getPythonCandidates()) {
+        const result = spawnSync(candidate.command, candidate.checkArgs, {
+            cwd: ML_SERVICE_DIR,
+            encoding: 'utf8',
+            shell: false,
+        });
+
+        if (!result.error && result.status === 0) {
+            return candidate;
+        }
+    }
+
+    return null;
+};
+
+const restartMlService = async () => {
+    if (mlProcess) {
+        try {
+            mlProcess.kill();
+        } catch (err) {
+            console.warn('[ml-service] Failed to kill existing process:', err.message);
+        }
+        mlProcess = null;
+    }
+    mlBootPromise = null;
+    return ensureMlService();
+};
+
+const waitForMlHealth = async (timeoutMs = ML_BOOT_TIMEOUT_MS) => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        if (await isMlHealthy()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+};
+
+const ensureMlService = async () => {
+    if (await isMlHealthy()) {
+        lastMlError = null;
+        return true;
+    }
+
+    if (mlBootPromise) {
+        return mlBootPromise;
+    }
+
+    mlBootPromise = (async () => {
+        const pythonCmd = pickPythonCommand();
+
+        if (!pythonCmd) {
+            lastMlError = 'Python is not available. Recreate ml-service/venv or install Python, then start the ML service.';
+            console.warn(`Local ML Service unavailable: ${lastMlError}`);
+            return false;
+        }
+
+        try {
+            mlProcess = spawn(pythonCmd.command, pythonCmd.runArgs, {
+                cwd: ML_SERVICE_DIR,
+                windowsHide: true,
+                stdio: ['ignore', 'pipe', 'pipe'],
+                shell: false,
+            });
+
+            mlProcess.stdout.on('data', (data) => {
+                console.log(`[ml-service] ${data.toString().trim()}`);
+            });
+
+            mlProcess.stderr.on('data', (data) => {
+                const message = data.toString().trim();
+                lastMlError = message;
+                console.warn(`[ml-service] ${message}`);
+            });
+
+            mlProcess.on('error', (err) => {
+                lastMlError = err.message;
+                console.warn('[ml-service] spawn error:', err.message);
+            });
+
+            mlProcess.on('exit', (code) => {
+                if (code !== 0) {
+                    lastMlError = `ML service exited with code ${code}.`;
+                }
+                mlProcess = null;
+                mlBootPromise = null;
+            });
+
+            const runArgsStr = (pythonCmd.runArgs || []).join(' ');
+            console.log(`Starting ML service using: ${pythonCmd.command} ${runArgsStr} (cwd=${ML_SERVICE_DIR}), waiting up to ${ML_BOOT_TIMEOUT_MS}ms for health...`);
+            const healthy = await waitForMlHealth();
+            if (!healthy && !lastMlError) {
+                lastMlError = `ML service did not become healthy on ${ML_SERVICE_URL} within ${ML_BOOT_TIMEOUT_MS}ms.`;
+            }
+            return healthy;
+        } catch (err) {
+            lastMlError = err.message;
+            console.warn('Unable to auto-start local ML Service:', err.message);
+            return false;
+        } finally {
+            if (!(await isMlHealthy())) {
+                mlBootPromise = null;
+            }
+        }
+    })();
+
+    return mlBootPromise;
+};
+
+const ensureMlServiceFast = async (timeoutMs = 8000) => {
+    if (await isMlHealthy()) {
+        lastMlError = null;
+        return true;
+    }
+
+    const bootPromise = ensureMlService();
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs));
+    return Promise.race([bootPromise, timeoutPromise]);
+};
+
+const callMlJson = async (endpoint, body) => {
+    const mlUrl = `${ML_SERVICE_URL}${endpoint}`;
+    let ready = await ensureMlServiceFast();
+    if (!ready) {
+        console.warn(`[ml-service] local health probe timed out or failed, waiting for ML service startup at ${ML_SERVICE_URL}`);
+        ready = await ensureMlService();
+    }
+
+    if (!ready) {
+        console.warn(`[ml-service] local ML service unavailable after startup wait. lastMlError=${lastMlError}`);
+        return null;
+    }
+
+    try {
+        console.log(`[ml-service] calling ${mlUrl}`);
+        const response = await fetchWithTimeout(mlUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }, 10000);
+
+        if (!response.ok) {
+            lastMlError = `ML service returned ${response.status} for ${endpoint}.`;
+            return null;
+        }
+
+        const text = await response.text();
+        try {
+            const json = JSON.parse(text);
+            lastMlError = null;
+            return json;
+        } catch (err) {
+            lastMlError = `Invalid JSON from ML service on ${endpoint}: ${err.message}`;
+            console.warn('[ml-service] Invalid JSON response:', text);
+            return null;
+        }
+    } catch (err) {
+        lastMlError = err.message;
+        return null;
+    }
+};
+
+exports.getMlServiceStatus = async () => {
+    const healthy = await isMlHealthy();
+    return {
+        healthy,
+        url: ML_SERVICE_URL,
+        error: healthy ? null : lastMlError,
+    };
+};
+
+exports.ensureMlService = ensureMlService;
+
 exports.autoCategorizeExpense = async ({ title, description, amount }) => {
+    // 1. Try local ML Service first
+    const mlData = await callMlJson('/categorize', { title, description, amount });
+    if (mlData) {
+        return {
+            category: mlData.category,
+            merchant: title || 'Unknown',
+            confidence: mlData.confidence,
+            reason: mlData.reason,
+        };
+    }
+
+    // 2. Fallback to OpenAI or Regex
     try {
         const prompt = [
             { role: 'system', content: 'Categorize user expense into JSON {"category":"...","merchant":"...","confidence":0.0-1.0,"reason":"..."}' },
@@ -53,117 +282,159 @@ exports.autoCategorizeExpense = async ({ title, description, amount }) => {
 
         const raw = await callLLM(prompt, 0);
         if (!raw) {
-            const fallback = {
-                category: 'other',
+            const fallbackCategory = (text) => {
+                const lower = (text || '').toLowerCase();
+                if (/uber|lyft|taxi|bus|fuel|petrol|gas/.test(lower)) return 'transport';
+                if (/food|restaurant|cafe|grocery/.test(lower)) return 'food';
+                if (/rent|electricity|internet|water|utility/.test(lower)) return 'utilities';
+                if (/netflix|spotify|prime|subscription/.test(lower)) return 'subscriptions';
+                if (/doctor|hospital|medicine/.test(lower)) return 'medical';
+                return 'other';
+            };
+
+            return {
+                category: fallbackCategory(`${title} ${description}`),
                 merchant: title || 'Unknown',
                 confidence: 0.55,
-                reason: 'Fallback categorization',
+                reason: 'Fallback rule-based categorization',
             };
-            return fallback;
         }
 
-        let parsed;
-        try {
-            parsed = JSON.parse(raw);
-        } catch (err) {
-            console.error('autoCategorizeExpense: JSON parse failed', err, raw);
-            parsed = null;
-        }
-
-        const fallbackCategory = (text) => {
-            const lower = (text || '').toLowerCase();
-            if (/uber|lyft|taxi|bus|fuel|petrol|gas/.test(lower)) return 'transport';
-            if (/food|restaurant|cafe|grocery/.test(lower)) return 'food';
-            if (/rent|electricity|internet|water|utility/.test(lower)) return 'utilities';
-            if (/netflix|spotify|prime|subscription/.test(lower)) return 'subscriptions';
-            if (/doctor|hospital|medicine/.test(lower)) return 'medical';
-            return 'other';
-        };
-
+        const parsed = JSON.parse(raw);
         return {
-            category: parsed?.category || fallbackCategory(`${title} ${description}`),
+            category: parsed?.category || 'other',
             merchant: parsed?.merchant || title || 'Unknown',
             confidence: Number(parsed?.confidence || 0.7),
-            reason: parsed?.reason || 'AI or fallback',
+            reason: parsed?.reason || 'AI categorized',
         };
     } catch (error) {
-        console.error('autoCategorizeExpense error:', error);
+        console.error('autoCategorizeExpense fallback error:', error);
         return {
             category: 'other',
             merchant: title || 'Unknown',
             confidence: 0.5,
-            reason: 'fallback due error',
+            reason: 'fallback due to error',
         };
     }
 };
 
-exports.generateBudgetAdvice = async ({ monthlyIncome, topCategories, currency }) => {
-    try {
-        const totalExpense = topCategories.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-        const safeToSpend = Math.max(Math.round(monthlyIncome - totalExpense), 0);
-        const utilization = monthlyIncome > 0 ? Math.min(1, totalExpense / monthlyIncome) : 0;
-        const healthScore = Math.max(0, Math.min(100, Math.round((1 - utilization) * 100)));
+const buildFallbackBudgetAdvice = ({ monthlyIncome, topCategories, currency }) => {
+    const totalExpense = topCategories.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const safeToSpend = Math.max(Math.round(monthlyIncome - totalExpense), 0);
+    const utilization = monthlyIncome > 0 ? totalExpense / monthlyIncome : 0;
+    const utilizationPct = Math.round(utilization * 100);
+    const healthScore = Math.max(0, Math.min(100, Math.round((1 - utilization) * 100)));
+    const riskLevel =
+        utilization >= 1 ? 'critical' :
+        utilization >= 0.85 ? 'high' :
+        utilization >= 0.65 ? 'medium' :
+        utilization >= 0.4 ? 'low' :
+        'excellent';
+    const limitMultiplier =
+        riskLevel === 'critical' ? 0.7 :
+        riskLevel === 'high' ? 0.8 :
+        riskLevel === 'medium' ? 0.88 :
+        0.95;
 
-        const categoryBudgets = topCategories.map((item) => ({
-            category: item.category,
-            suggestedLimit: Math.max(Math.round(item.amount * 0.9), 0),
-        }));
+    const categoryBudgets = topCategories.map((item) => ({
+        category: item.category,
+        suggestedLimit: Math.max(Math.round(Number(item.amount || 0) * limitMultiplier), 0),
+    }));
 
-        const recommendations = [];
-        if (utilization > 0.9) {
-            recommendations.push('I see your expenses are very high relative to income; let’s tighten the top category this month.');
-        } else if (utilization > 0.75) {
-            recommendations.push('Nice progress — you are close to a secure budget zone, just a little more control needed.');
-        } else {
-            recommendations.push('Excellent job! Your budget is well-balanced and you have room to grow savings.');
-        }
+    const recommendations = [];
+    if (riskLevel === 'critical') {
+        recommendations.push(`Critical risk: spending is ${utilizationPct}% of income, so pause non-essential purchases until cash flow is positive.`);
+    } else if (riskLevel === 'high') {
+        recommendations.push(`High risk: spending is ${utilizationPct}% of income. Reduce flexible categories by 15-20% this month.`);
+    } else if (riskLevel === 'medium') {
+        recommendations.push(`Medium risk: spending is ${utilizationPct}% of income. A focused 10-12% cut in your top category should improve headroom.`);
+    } else if (riskLevel === 'low') {
+        recommendations.push(`Low risk: spending is ${utilizationPct}% of income. Keep a light cap on wants while protecting savings.`);
+    } else {
+        recommendations.push(`Excellent zone: spending is only ${utilizationPct}% of income, leaving strong room for savings or planned goals.`);
+    }
 
-        if (topCategories.length > 0) {
-            const top1 = topCategories[0];
-            recommendations.push(`Try reducing ${top1.category} by 10% next month and see how that helps your safe-to-spend number.`);
-        }
+    if (topCategories.length > 0) {
+        const top1 = topCategories[0];
+        const cutPercent = riskLevel === 'critical' ? 25 : riskLevel === 'high' ? 20 : riskLevel === 'medium' ? 12 : 8;
+        recommendations.push(`Top driver: ${top1.category} is ${currency || 'USD'} ${Math.round(Number(top1.amount || 0))}. Try a ${cutPercent}% reduction to free about ${currency || 'USD'} ${Math.round(Number(top1.amount || 0) * cutPercent / 100)}.`);
+    }
 
-        recommendations.push('Keep a small weekly review to stay on track and avoid surprise over-spending.');
+    recommendations.push(riskLevel === 'critical' || riskLevel === 'high'
+        ? 'Set a weekly spending ceiling now so the month does not drift further.'
+        : 'Keep a weekly review rhythm so the forecast stays accurate as new expenses arrive.');
 
-        const messages = [];
-        if (utilization > 0.9) {
-            messages.push(`Heads-up: you are spending ${Math.round(utilization * 100)}% of your income. Prioritize essentials and delay non-urgent purchases.`);
-        } else if (utilization > 0.75) {
-            messages.push(`You are at ${Math.round(utilization * 100)}% of income. A small tweak will make your monthly cash flow much stronger.`);
-        } else {
-            messages.push(`You are in a healthy zone at ${Math.round(utilization * 100)}% utilization. Great work keeping your expense rhythm steady!`);
-        }
+    const messages = [];
+    if (riskLevel === 'critical') {
+        messages.push(`Critical budget risk: expenses are ${utilizationPct}% of income, so your safe-to-spend amount is limited until spending drops.`);
+    } else if (riskLevel === 'high') {
+        messages.push(`High budget risk at ${utilizationPct}% utilization. Prioritize essentials and reduce discretionary spending.`);
+    } else if (riskLevel === 'medium') {
+        messages.push(`Medium budget risk at ${utilizationPct}% utilization. A small but consistent category cut will strengthen cash flow.`);
+    } else if (riskLevel === 'low') {
+        messages.push(`Low budget risk at ${utilizationPct}% utilization. You have room, but keep category limits active.`);
+    } else {
+        messages.push(`Excellent budget position at ${utilizationPct}% utilization. Great work keeping expenses far below income.`);
+    }
 
-        messages.push(`Based on your current data, you can safely spend around ${currency || 'USD'} ${safeToSpend}.`);
+    messages.push(`Based on your current data, you can safely spend around ${currency || 'USD'} ${safeToSpend}.`);
 
-        const followUps = [
+    return {
+        healthScore,
+        safeToSpend,
+        categoryBudgets,
+        recommendations,
+        message: messages.join(' '),
+        followUps: [
             'Can you suggest three small changes I can make in the next week?',
             'What is the best way to save for an emergency fund with this budget?',
             'How should I adjust if my income changes next month?',
-        ];
+        ],
+        riskLevel,
+        isML: false
+    };
+};
 
+exports.generateBudgetAdvice = async ({ monthlyIncome, topCategories, currency, incomes = [], expenses = [] }) => {
+    // 1. Try local ML Service first
+    const mlData = await callMlJson('/forecast-budget', { incomes, expenses, currency });
+    if (mlData) {
         return {
-            healthScore,
-            safeToSpend,
-            categoryBudgets,
-            recommendations,
-            message: messages.join(' '),
-            followUps,
-        };
-    } catch (error) {
-        console.error('generateBudgetAdvice error:', error);
-        return {
-            healthScore: 0,
-            safeToSpend: 0,
-            categoryBudgets: [],
-            recommendations: ['Unable to compute recommendations right now. Please try again later.'],
-            message: 'Oops! I could not generate advice at the moment. Try again in a few seconds.',
-            followUps: ['Check your income and expenses entries', 'Reload the app and try again'],
+            healthScore: mlData.healthScore,
+            safeToSpend: mlData.safeToSpend,
+            categoryBudgets: mlData.categoryBudgets,
+            recommendations: mlData.recommendations,
+            message: mlData.message,
+            followUps: mlData.followUps,
+            riskLevel: mlData.riskLevel,
+            isML: true,
+            mlError: null
         };
     }
+
+    return {
+        ...buildFallbackBudgetAdvice({ monthlyIncome, topCategories, currency }),
+        mlError: lastMlError,
+    };
 };
 
 exports.chatWithFinanceAssistant = async ({ question, context }) => {
+    // 1. Try local ML Service first
+    const mlData = await callMlJson('/chat-advice', { question, context });
+    if (mlData && typeof mlData.answer === 'string') {
+        return {
+            answer: mlData.answer,
+            followUps: Array.isArray(mlData.followUps) ? mlData.followUps : [],
+            isML: true,
+            mlError: null
+        };
+    }
+
+    if (mlData) {
+        console.warn('[ml-service] chat-advice returned invalid response, falling back.');
+    }
+
+    // 2. Fallback to rule-based response
     try {
         const text = (question || '').toLowerCase().trim();
         const income = Number(context?.totalIncome || 0);
@@ -237,12 +508,14 @@ exports.chatWithFinanceAssistant = async ({ question, context }) => {
         return {
             answer: answer + '\nPractical next step: save first, then spend wisely. Ask me for a day-by-day tracker if you want.',
             followUps,
+            isML: false
         };
     } catch (error) {
-        console.error('chatWithFinanceAssistant error:', error);
+        console.error('chatWithFinanceAssistant fallback error:', error);
         return {
             answer: 'I could not generate advice right now. Please retry with a shorter question.',
             followUps: ['How to spend 60000 efficiently'],
+            isML: false
         };
     }
 };

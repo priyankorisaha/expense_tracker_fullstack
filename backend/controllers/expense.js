@@ -12,8 +12,8 @@ const { autoCategorizeExpense } = require('../services/ai');
         amount = Number(amount);
  
 
-        if (!title || !description || !date) {
-            return res.status(400).json({ message: 'title, description, date are required!' });
+        if (!title || !date) {
+            return res.status(400).json({ message: 'title and date are required!' });
          }
 
 
@@ -32,7 +32,7 @@ const { autoCategorizeExpense } = require('../services/ai');
             merchant: aiCategory.merchant,
             aiConfidence: aiCategory.confidence,
             aiReason: aiCategory.reason,
-            description,
+            description: description || '',
             date,
         });
 

@@ -1,8 +1,9 @@
 import React from 'react'
 import styled from 'styled-components'
 import { dateFormat } from '../../utils/dateFormat';
-import { bitcoin, book, calender, card, circle, clothing, comment,food, freelance, medical, money, piggy, stocks, takeaway, trash, tv, users, yt } from '../../utils/Icons';
+import { bitcoin, book, calender, card, circle, clothing, food, freelance, medical, money, piggy, stocks, takeaway, trash, tv, users, yt } from '../../utils/Icons';
 import Button from '../Button/Button';
+import { useGlobalContext } from '../../context/globalContext';
 
 function IncomeItem({
     id,
@@ -64,6 +65,9 @@ function IncomeItem({
 
     console.log('type', type)
 
+    const { user } = useGlobalContext();
+    const currency = user?.currency === 'USD' ? '$' : (user?.currency === 'INR' ? '₹' : (user?.currency || '₹'));
+
     return (
         <IncomeItemStyled indicator={indicatorColor}>
             <div className="icon">
@@ -73,12 +77,9 @@ function IncomeItem({
                 <h5>{title}</h5>
                 <div className="inner-content">
                     <div className="text">
-                        <p>₹{amount}</p>
+                        <p>{currency}{amount}</p>
                         <p>{calender} {dateFormat(date)}</p>
-                        <p>
-                            {comment}
-                            {description}
-                        </p>
+                        {description && <p>{description}</p>}
                     </div>
                     <div className="btn-con">
                         <Button 

@@ -35,6 +35,8 @@ exports.getBudgetCopilot = async (req, res) => {
             monthlyIncome,
             topCategories,
             currency: user?.currency || 'USD',
+            incomes,
+            expenses,
         });
 
         const fallbackSafeToSpend = Math.max(monthlyIncome - monthlyExpense, 0);
@@ -42,6 +44,7 @@ exports.getBudgetCopilot = async (req, res) => {
         return res.status(200).json({
             monthlyIncome,
             monthlyExpense,
+            currency: user?.currency || 'USD',
             healthScore: aiAdvice?.healthScore ?? Math.max(0, Math.min(100, Math.round((fallbackSafeToSpend / (monthlyIncome || 1)) * 100))),
             safeToSpend: aiAdvice?.safeToSpend ?? fallbackSafeToSpend,
             categoryBudgets:
@@ -57,6 +60,8 @@ exports.getBudgetCopilot = async (req, res) => {
                 ],
             message: aiAdvice?.message || 'Here is what your budget looks like and next steps to stay on track.',
             followUps: aiAdvice?.followUps || ['How can I save 10% more this month?', 'Help me plan for an emergency fund', 'Should I lower subscription expenses?'],
+            isML: Boolean(aiAdvice?.isML),
+            mlError: aiAdvice?.mlError || null,
         });
     } catch (error) {
         console.error('getBudgetCopilot error:', error);

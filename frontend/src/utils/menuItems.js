@@ -31,4 +31,16 @@ export const menuItems = [
         icon: users,
         link: '/dashboard',
     },
+    {
+        id: 7,
+        title: 'Monthly Income',
+        icon: trend,
+        link: '/dashboard',
+    },
+    {
+        id: 8,
+        title: 'Monthly Expenses',
+        icon: expenses,
+        link: '/dashboard',
+    },
 ];

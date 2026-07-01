@@ -9,11 +9,13 @@ import Income from './Components/Income/Income'
 import Expenses from './Components/Expenses/Expenses';
 import BudgetCopilot from './Components/BudgetCopilot/BudgetCopilot';
 import AIChat from './Components/AIChat/AIChat';
+import MonthlyHistory from './Components/MonthlyHistory/MonthlyHistory';
 import Auth from './Components/Auth/Auth';
 import { useGlobalContext } from './context/globalContext';
 
 function App() {
   const [active, setActive] = useState(1)
+  const [queuedChatQuestion, setQueuedChatQuestion] = useState(null)
 
   const { token } = useGlobalContext()
 
@@ -28,9 +30,21 @@ function App() {
       case 4:
         return <Expenses />
       case 5:
-        return <BudgetCopilot />
+        return (
+          <BudgetCopilot
+            setActive={setActive}
+            onAskFollowUp={(question) => {
+              setQueuedChatQuestion({ question, queuedAt: Date.now() })
+              setActive(6)
+            }}
+          />
+        )
       case 6:
-        return <AIChat />
+        return <AIChat queuedQuestion={queuedChatQuestion} />
+      case 7:
+        return <MonthlyHistory type="income" />
+      case 8:
+        return <MonthlyHistory type="expense" />
       default:
         return <Dashboard />
     }

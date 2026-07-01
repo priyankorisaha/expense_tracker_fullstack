@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "c:\\Users\\PRIYANKORI SAHA\\Desktop\\WEBD\\Project_4\\expense-tracker_fullstack\\ml-service\\venv\\Scripts\\python.exe",
+  "python.analysis.extraPaths": [
+    "./ml-service"
+  ]
+}
